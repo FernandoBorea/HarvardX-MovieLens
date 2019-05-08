@@ -1,0 +1,451 @@
+---
+title: "MovieLens Project"
+author: "Fernando Jose Velasco Borea"
+date: "April 24th 2019"
+output: 
+    pdf_document:
+      toc: true
+      number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\pagebreak
+
+#Introduction and Overview
+
+The following project has the objective to train a supervised machine learning movie recomendation algorithm based on the data set provided by HarvardX through the Data Science: Capstone course. The main goal is to train an algorithm that is able to yield an $RMSE < 0.87750$. 
+
+The general approach that will be taken is basically, first to analyze the edx and validation data set and its structure, then to start gathering useful insights through statistics and data visualization techniques that helps define a suitable course of action in the algorithm development process.
+
+This project will be divided in the following steps:
+
+1. Data Adquisition: The project will start by downloading the data set using the script provided by HarvardX.
+2. Data Exploration: Once all the data is obtained, we will proceed with the exploratory data analysis.
+3. Modeling: With the insights we gain on step 2, we will start to make the recommendation system model.
+4. Model Testing (Results): Once we define our final model using our training data set, we will run it on our test data set.
+
+Once we acomplish the steps previously described we will elaborate a “Conclusion” section with all the findings obtained during the exploratory data analysis and the final model implemented on the project as well as the results obtained with the model used.
+
+This project will have a PDF and a Rmd version of this report as well as a script with all the codes used to make the project (with the exception of the R Markdown set-up lines included by default when opening a new file). The script will have detailed comments about each section to enhance readability and interpretation of the approaches used. The comments will include sectioned descriptions and line descriptions when needed.
+
+##Side Notes
+
+To enhance code readability when viewing the Rmd version of this report and/or when viewing the MovieLens Script file to see just the coding part of the project, you can _fold_ the all the sections from RStudio to then just _unfold_ the section you are currently viewing, therefore, easing the interpretation of the code.
+
+You can quickly do this from R studio going to _Edit > Folding > Collapse All_ or simply with the shortcut _ALT + O_ on windows. If you want to exapnd all the sections again, you can use the shortcut _ALT + SHIFT + O_ on windows or from _Edit > Folding > Expand All_.
+
+The code contained in this report can be found on the MovieLens Script file, as it follows the same structure and order as the report, therefore, making it easier to reproduce the results while maintaining code readability.
+
+To render the Rmd version of this report you will need to have a LaTeX installation. If you don't have it, you can find more details on how to install it [here](https://bookdown.org/yihui/rmarkdown/installation.html#installation)
+
+\pagebreak
+
+#Data Adquisition
+
+This step will be based almost entirely on the script provided by HarvardX for this course. The code contained on the script can be found below. Please note that depending on your internet conection and system characteristics, running this code and/or rendering the Rmd version of this report can take several minutes.
+
+```{r data download}
+#######################################################
+# Create edx set, validation set, and submission file #
+#######################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- read.table(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                      col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+```
+
+Once the data adquisition process has finished, we will quickly check the structure of the data sets we obtained to gain some preliminary insights. For this, we will simply use the `str()` function.
+
+```{r preliminary data exploration}
+
+str(edx)
+str(validation)
+
+```
+
+Once we have check the data set structure, we are ready to proceed to the Data Exploration step to gather more information about the data.
+
+\pagebreak
+
+#Data Exploration
+
+The first, yet very important insight that we gained on the preliminary data exploration we made on the previous step is that both, the `edx` and `validation` data sets follow the same structure, and we can also validate that looking at the first entries using the `head()` function.
+
+```{r checking first entries}
+head(edx)
+head(validation)
+```
+
+As we can see also from the Preliminary Data Exploration, the `edx` data set is very large, having over 9 million ratings. On the other hand, the `validation` data set has almost a million entries, more specifically, it has $999,999$. Taking this into account, we will initially try to use the same approach as on the Introduction to Data Science book provided by Professor Rafael A. Irizarry. This resource was mentioned on the Welcome to Data Science: Capstone section of the course.
+We will take this approach because fitting models with this data set sizes would take too much time and might probably cause R to crash while trying to run the code, therefore, making it very dificult to reproduce the results.
+
+We will start by checking out the number of unique users and the number of unique movies on both data sets:
+
+```{r checking unique movies and users}
+
+edx %>% 
+  summarize(n_users = n_distinct(userId),
+          n_movies = n_distinct(movieId))
+
+validation %>% 
+  summarize(n_users = n_distinct(userId),
+          n_movies = n_distinct(movieId))
+```
+
+We can multiply the number of users by the number of movies in both cases to then compare the result with the data set sizes, so we can know whether every user rated every movie or not.
+
+```{r checking if every user rated every movie}
+
+edx_users_and_movies <- edx %>% 
+                          summarize(n_users = n_distinct(userId),
+                          n_movies = n_distinct(movieId))
+
+(edx_users_and_movies$n_users * edx_users_and_movies$n_movies) == nrow(edx)
+
+val_users_and_movies <- validation %>% 
+                          summarize(n_users = n_distinct(userId),
+                          n_movies = n_distinct(movieId))
+
+(val_users_and_movies$n_users * val_users_and_movies$n_movies) == nrow(validation)
+```
+
+As we can see, in both cases not every user rated every movie. Now, our final goal is to make a model that is able to predict the rating that a user would give to a movie, to then decide whether or not to recommend it to the user. Before we dive into the model development, we will check out the distribution of movie rating frequency as well as the user rating frequency on both data sets to make sure we see about the same pattern.
+
+```{r data distribution check}
+edx %>%
+  count(movieId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() +
+  labs(x = "Movie Ratings (Log10 Scale)", y = "Count", title = "Movie Rating Frequency - edX Data Set")
+
+validation %>% 
+  count(movieId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() +
+  labs(x = "Movie Ratings (Log10 Scale)", y = "Count", title = "Movie Rating Frequency - Validation Data Set")
+
+edx %>% 
+  count(userId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() +
+  labs(x = "User Ratings (Log10 Scale)", y = "Count", title = "User Rating Frequency - edX Data Set")
+
+validation %>% 
+  count(userId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30, color = "black") +
+  scale_x_log10() +
+  labs(x = "User Ratings (Log10 Scale)", y = "Count", title = "User Rating Frequency - Validation Data Set")
+
+```
+
+As we can see, both data sets follow a very similar distribution, telling us practically that some movies are rated more frecuently than others and some users are more active rating movies than others, which is expected as the validation data set is a partition from the 10M MovieLens data set. Still, it is useful to make sure both data sets follow a similar structure on their distribution. 
+When we go back to the user and movie count, we can actually see that the number of users and movies is very similar on both data set, and the difference is very likely to be caused due to the removal of ratings we made on the Data Adquisition step when we removed users and movies that were present on the validation data set but not on the edx data set.
+
+Lastly, we will check the rating distribution on both data sets to see what rating value is the most common accross the users. This will serve us as a guideline to evaluate the viavility of using the average rating as an initial prediction. If we see that both data sets follow a similar rating distribution, we will use that fact to start our modeling approach.
+
+```{r ratings disdtribution}
+
+edx %>%
+mutate(rating = as.factor(rating)) %>%
+  count(rating) %>%
+  ggplot(aes(x = rating, y = n/1000)) +
+  geom_col(color = "black") +
+  labs(x = "Ratings", y = "Count in Thousands", title = "Movie Rating Frequency - edX Data Set")  
+
+validation %>%
+  mutate(rating = as.factor(rating)) %>%
+  count(rating) %>%
+  ggplot(aes(x = rating, y = n/1000)) +
+  geom_col(color = "black") +
+  labs(x = "Ratings", y = "Count in Thousands", title = "Movie Rating Frequency - Validation Data Set")  
+
+```
+
+As we can see, we are seeing almost the same ratings distribution on both data sets, clearly seeing that the 4-Stars rating is the most common and the Half-Star ratings are less common than whole stars ratings. The facts we are seeing about the same distribution on both data sets and we see a clear most-common rating on both data sets, we can start creating our modeling approach.
+
+\pagebreak
+
+#Modeling
+
+Now that we will start building our model, we will only work on the edX data set, as the validation data set will work as a new and unseen data for our model.
+As we saw previously, the most common rating accross the edX data set was 4, so we will start with a very simple model, predicting that rating regardless of everything else. We will use the $RMSE$ to evaluate our system, so we will start by defining a function that computes that value for us, as using any algorithm included on a library would take way too long to train because of the data set size. In case we are unable to achieve our $RMSE$ goal, we will evaluate further approaches.
+
+The $RMSE$ formula is defined as follows: $$ RMSE = \sqrt{\frac{1}{N}\sum_{u,i} (\hat{y}_{u,i} - y_{u,i})^2} $$
+
+The $RMSE$ can be interpreted like a standard deviation, meaning that the value we get for this it is basically the typical error we do a prediction. So, if we get $RMSE > 1$ we are failing by more than one star in our rating prediction, which is not good at all.
+
+First we will define the function to calculate the $RMSE$, which will be as follows:
+
+```{r RMSE formula}
+RMSE <- function(true_ratings, predicted_ratings){
+        sqrt(mean((true_ratings - predicted_ratings)^2))
+        }
+```
+
+We will start with a very simple approach, predicting the most-common rating of the `edX` data set (4-Star rating) regardless of the rest of the data and then evaluate the $RMSE$ we get from the prediction.
+
+##Most-Common Rating Model
+
+```{r most-common rating prediction}
+
+mc_rmse <- RMSE(edx$rating, 4)
+mc_rmse
+```
+
+As expected, our $RMSE$ is quite bad, we are predicting with an error of approximately 1.17 stars. Still, this sets us a baseline for our next modeling approaches. To keep our reported results tidy, we will be storing our results on a chart.
+
+```{r results table}
+rmse_results <- data_frame(Model = "Most-Common Rating Model", RMSE = mc_rmse)
+rmse_results %>% knitr::kable()
+```
+
+##Average Rating Model
+
+Taking into account our previous result, we will base our next model on the average rating of the data set, which we can write as: $$ Y_{u, i} = \mu + \epsilon_{u, i} $$
+with $\epsilon_{u,i}$ independent error sample from the same distribution centered at 0 and $\mu$ the “true” rating for all movies. This very simple model makes the assumption that all differences in movie ratings are explained by random variation alone. We know that the estimate that minimizes the $RMSE$ is the least square estimate of $Y_{u,i}$ , in this case, it's the average of all ratings:
+
+```{r average rating}
+mu <- mean(edx$rating)
+mu
+```
+
+As we can see, we got a somewhat close value to our initial approach of predicting the 4-Star rating as it is the most common one in the data. This should bring down the $RMSE$ because the average should minimize the $RMSE$ as explained above. We will compute now the $RMSE$ with the prediction being the average rating:
+
+```{r average rating prediction}
+avg_rating_rmse <- RMSE(edx$rating, mu)
+avg_rating_rmse
+```
+
+We will now save the result of our new model into the chart we built earlier:
+
+```{r store the new average model result}
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model ="Average Rating Model",  
+                                     RMSE = avg_rating_rmse))
+rmse_results %>% knitr::kable()
+
+```
+
+We can see an improvement when compared to our previous $RMSE$. This suggest we can do even better, we will build the next model based upon our previous Average Rating Model.
+
+##Movie Effect Model
+
+By experience, we know some movies are rated higher than others, so we will take this fact into consideration, adding a Movie Effect term into our model. We will call this term $b_{i}$ because basically we will be taking into account the "Bias" (b) for each movie (i). We can write it as follows: $$Y_{u, i} = \mu +b_{i}+ \epsilon_{u, i}$$
+
+First, we will look at the distribution of the $b_{i}$ term, to do so, we will first compute it and then plot the results as follows:
+
+```{r bi computing}
+
+movie_avgs <- edx %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+movie_avgs %>% ggplot(aes(b_i)) +
+  geom_histogram(bins = 10, color = "black") + 
+  labs(x = "Movie Bias Values", y = "Count", title = "Movie Bias Distribution")
+
+```
+
+As we can see, the histogram is skewed to the left, meaning that it is usual to see movies that have bad ratings. Now we have our movie penalty taken into account, so given that we have a $\hat{\mu} = 3.5$ on our average, a value of $b_{i} = 1.5$ would imply a perfect 5-Star rating. Let's see how this new term affects our results:
+
+```{r movie bias model}
+predicted_ratings <- mu + edx %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  pull(b_i)
+
+movie_bias_rmse <- RMSE(predicted_ratings, edx$rating)
+movie_bias_rmse
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model ="Movie Bias Model",  
+                                     RMSE = movie_bias_rmse))
+rmse_results %>% knitr::kable()
+```
+
+As we can see, we are now below 1, meaning that we managed to reduce our average error without prediction to less than 1 star. Still, we need to improve our model to be able to achieve our $RMSE < 0.8775$ goal.
+
+##Movie Bias and User Bias Model
+
+We know this because of the insights we gained on the Data Exploration phase that there are some users that tend to rate the movies lower than the average while there are some others that do the opposite. We will try to add this into consideration to our existing model since we definitely improved the results of our previous model when we included the Movie Bias. Let's see if we see an improvement when we also include a User Bias into the model.
+
+First of all, we will only take into consideration users that have rated 100 movies or more, so our model is based on active users. Let's begin with computing the average rating for user $u$ that have rated 100 movies or more and then we will plot the distribution:
+
+```{r user bias computation}
+edx %>% 
+  group_by(userId) %>% 
+  filter(n()>=100) %>%
+  summarize(b_u = mean(rating)) %>%
+  ggplot(aes(b_u)) + 
+  geom_histogram(bins = 30, color = "black")
+```
+
+As we expected, we see the vast majority of the data around the computed average, still, we can see that some users tend to give a worse rating while some others tend to give a better rating, so taking this fact into consideration should improve our $RMSE$ values. Now that we have seen this new term can be handy for our model, we can write it as follows: $$Y_{u, i} = \mu + b_{i} + b_{u} + \epsilon_{u, i}$$
+
+The term $b_{u}$ is a user-specific effect, so if a fussy user gives a bad rating (we would have a negative value of $b_{u}$ for this user) to a great movie (which should have a positive $b_{i}$ or in other words, a positive movie bias), both values should counter each other so we might be able to predict that this user gave to a great movie a 3-Star rating rather than a 5-Star rating, and by doing so, we should have a predicted rating much closer to the actual rating, therefore reducing our $RMSE$ when we predict for all users.
+
+Now, we will compute our user bias and then use it as a new predictor to our model to see if our $RMSE$ improves:
+
+```{r movie and user bias model}
+user_avgs <- edx %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+predicted_ratings <- edx %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+movie_user_bias_rmse <- RMSE(predicted_ratings, edx$rating)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model="Movie + User Bias Model",  
+                                     RMSE = movie_user_bias_rmse))
+rmse_results %>% knitr::kable()
+```
+
+As we can see, we achieved our $RMSE$ goal with this model. Now that we have defined several approaches and gradually improved them, we will now test them on our validation data set and see if we get similar results.
+
+\pagebreak
+
+#Model Testing (Results)
+
+We will now run each model we've built on the validation data set to make sure our final model holds up with our goal and to evaluate the results obtained on the other models compared to the ones we get with the validation data set
+
+##Most-Common Rating Model
+
+We will start by running our first model on the validation set and see how it performed, to then store the results into a new chart.
+
+```{r most-common rating model validation}
+mc_rmse <- RMSE(validation$rating, 4)
+mc_rmse
+
+val_rmse_results <- data_frame(Model = "Most-Common Rating Model", RMSE = mc_rmse)
+val_rmse_results %>% knitr::kable()
+```
+
+As we can see, we got a pretty similar result as the first one. Now we will run the Average Rating Model with the validation data set and see how it performed.
+
+##Average Rating Model
+
+```{r average rating model validation}
+val_avg_rating_rmse <- RMSE(validation$rating, mu)
+val_avg_rating_rmse
+
+val_rmse_results <- bind_rows(val_rmse_results,
+                          data_frame(Model ="Average Rating Model",  
+                                     RMSE = val_avg_rating_rmse))
+val_rmse_results %>% knitr::kable()
+```
+
+As the `validation` data set is a smaller data set compared to the `edx` data set, it is expected that the $RMSE$ increased a bit when we used the Average Rating Model, still, we got about the same result as with the one obtained on the `edx` data set. Now, we will check the Movie Bias Model.
+
+##Movie Bias Model
+
+```{r movie bias model validation}
+val_movie_avgs <- edx %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+
+val_predicted_ratings <- mu + validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  pull(b_i)
+
+val_movie_bias_rmse <- RMSE(val_predicted_ratings, validation$rating)
+val_movie_bias_rmse
+
+val_rmse_results <- bind_rows(val_rmse_results,
+                          data_frame(Model ="Movie Bias Model",  
+                                     RMSE = val_movie_bias_rmse))
+val_rmse_results %>% knitr::kable()
+```
+
+As in this case our model is still based on the `edx` data set, therefore, using the average calculated which was based on that data set, it was expected to get again a slighty greater $RMSE$, still, yielding a very similar result. Lastly, we will check for our final model performance with the validation data set.
+
+##Movie and User Bias Model
+
+```{r movie and user bias model validation}
+val_user_avgs <- edx %>% 
+  left_join(val_movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+val_predicted_ratings <- validation %>% 
+  left_join(val_movie_avgs, by='movieId') %>%
+  left_join(val_user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+val_movie_user_bias_rmse <- RMSE(val_predicted_ratings, validation$rating)
+val_movie_user_bias_rmse
+
+val_rmse_results <- bind_rows(val_rmse_results,
+                          data_frame(Model="Movie + User Bias Model",  
+                                     RMSE = val_movie_user_bias_rmse))
+val_rmse_results %>% knitr::kable()
+```
+
+This time we got a larger increase on the $RMSE$ than we got on the `edx` data set, mainly because we are still relying on values originally computed on that data set to then test the model on a different and smaller data set. Still, our model held to accomplish our goal of achieving an $RMSE < 0.87750$.
+
+\pagebreak
+
+#Conclusions
+
+As we saw on the Model Testing phase, we achieved our goal of an $RMSE < 0.87750$ that held through both `edx` and `validation` data sets. In this case our final model is: $$Y_{u, i} = \mu + b_{i} + b_{u} + \epsilon_{u, i}$$
+Which gave us the following results from the training set (`edx` data set) and test set (`validation` data set):
+
+```{r final results tables}
+rmse_results %>% knitr::kable()
+val_rmse_results %>% knitr::kable()
+```
+
+In this type of machine learning challenges, is very important to take into account biases that might be affecting our data. By doing so, we will be able to create more accurate and adaptative models depending on the case study we are facing. Another potential improvement we could add to our model is a Genre Bias as by experience we can tell that there are some movie genres that tend to be rated higher than others. Even though we will not cover it on this project, that observation can be taken into consideration if we would like to improve further our final model.
+
+As a final conclusion for this project, we can say that on machine learning challenges that involves human bevaiour trying to replicate or quantify psycological behavior even when it can be very complex, it can also help a lot to improve the results of the model that is being developed as we clearly saw within this project when we went down from a $RMSE = 1.0612$ to an $RMSE = 0.8653$ just by including a Movie Bias and a User Bias into our final model.
